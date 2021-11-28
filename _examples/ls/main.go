@@ -2,11 +2,6 @@ package main
 
 import (
 	"fmt"
-	"io"
-	"os"
-	"path"
-	"strings"
-
 	"github.com/emirpasic/gods/trees/binaryheap"
 	"github.com/go-git/go-git/v5"
 	. "github.com/go-git/go-git/v5/_examples"
@@ -16,6 +11,9 @@ import (
 	"github.com/go-git/go-git/v5/plumbing/object"
 	"github.com/go-git/go-git/v5/plumbing/object/commitgraph"
 	"github.com/go-git/go-git/v5/storage/filesystem"
+	"io"
+	"path"
+	"time"
 
 	"github.com/go-git/go-billy/v5"
 	"github.com/go-git/go-billy/v5/osfs"
@@ -23,11 +21,14 @@ import (
 
 // Example how to resolve a revision into its commit counterpart
 func main() {
-	CheckArgs("<path>", "<revision>", "<tree path>")
 
-	path := os.Args[1]
-	revision := os.Args[2]
-	treePath := os.Args[3]
+	timeStart := time.Now()
+	//path := "D:\\ShWDaily\\1127\\flux-get-started\\flux-get-started" //os.Args[1]
+	path := "D:\\ShWDaily\\1127\\3\\flux-get-started.git"
+	shanghai, err := time.LoadLocation("Asia/Shanghai")
+	fmt.Println("loacation", shanghai, err)
+	since := time.Date(2021, 11, 27, 8, 0, 0, 0, shanghai)
+	until := time.Date(2021, 11, 29, 8, 0, 0, 0, shanghai)
 
 	// We instantiate a new repository targeting the given path (the .git folder)
 	fs := osfs.New(path)
@@ -41,44 +42,62 @@ func main() {
 	CheckIfError(err)
 	defer s.Close()
 
-	// Resolve revision into a sha1 commit, only some revisions are resolved
-	// look at the doc to get more details
-	Info("git rev-parse %s", revision)
+	blobMap := make(map[string]int)
+	ci, _ := r.CommitObjects()
+	ci.ForEach(func(c *object.Commit) error {
+		//fmt.Println("commits time: ",since, until,c.Author.When)
+		if c.Author.When.Before(until) && c.Author.When.After(since) {
 
-	h, err := r.ResolveRevision(plumbing.Revision(revision))
-	CheckIfError(err)
+			fi, _ := c.Files()
+			fi.ForEach(func(f *object.File) error {
+				//fmt.Println("search file1:", f.Name)
+				cfi, _ := r.Log(&git.LogOptions{From: c.Hash, FileName: &f.Name, Order: git.LogOrderCommitterTime})
+				cfOldestTime := c.Author.When
+				cfi.ForEach(func(cf *object.Commit) error {
+					cf2, _ := cf.Files()
+					cf2.ForEach(func(f2 *object.File) error {
+						if f2.Hash == f.Hash && cf.Author.When.Before(cfOldestTime) {
+							cfOldestTime = cf.Author.When
+							if cfOldestTime.Before(since) {
+								return nil
+							}
+						}
+						return nil
+					})
+					return nil
+				})
+				if cfOldestTime.After(since) && blobMap[f.Hash.String()] == 0 {
+					var branch string
+					biter, _ := r.Branches()
+					biter.ForEach(func(b *plumbing.Reference) error {
+						citer, _ := r.Log(&git.LogOptions{From: b.Hash(), Since: &since, Until: &until})
+						citer.ForEach(func(cc *object.Commit) error {
+							if cc.Hash == c.Hash {
+								branch = b.Name().String()
+								return nil
+							}
+							return nil
+						})
+						return nil
+					})
 
-	commit, err := r.CommitObject(*h)
-	CheckIfError(err)
+					fmt.Println("files catched: ", branch, c.Hash, f.Hash, f.Name, f.Size)
+					blobMap[f.Hash.String()] = 1
+				}
+				return nil
+			})
+			fs, _ := c.Stats()
+			for _, s := range fs {
+				if s.Addition+s.Deletion > 0 {
+					fmt.Println("commit stats: ", c.Hash, s.Name, s.Addition, s.Deletion)
+				}
+			}
+		}
+		return nil
+	})
 
-	tree, err := commit.Tree()
-	CheckIfError(err)
-	if treePath != "" {
-		tree, err = tree.Tree(treePath)
-		CheckIfError(err)
-	}
+	fmt.Println(time.Since(timeStart))
 
-	var paths []string
-	for _, entry := range tree.Entries {
-		paths = append(paths, entry.Name)
-	}
-
-	commitNodeIndex, file := getCommitNodeIndex(r, fs)
-	if file != nil {
-		defer file.Close()
-	}
-
-	commitNode, err := commitNodeIndex.Get(*h)
-	CheckIfError(err)
-
-	revs, err := getLastCommitForPaths(commitNode, treePath, paths)
-	CheckIfError(err)
-	for path, rev := range revs {
-		// Print one line per file (name hash message)
-		hash := rev.Hash.String()
-		line := strings.Split(rev.Message, "\n")
-		fmt.Println(path, hash[:7], line[0])
-	}
 }
 
 func getCommitNodeIndex(r *git.Repository, fs billy.Filesystem) (commitgraph.CommitNodeIndex, io.ReadCloser) {
