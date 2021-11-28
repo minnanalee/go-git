@@ -19,6 +19,12 @@ import (
 	"github.com/go-git/go-billy/v5/osfs"
 )
 
+type BigFile struct {
+	Branch string
+	Commit object.Commit
+	File   object.File
+}
+
 // Example how to resolve a revision into its commit counterpart
 func main() {
 
@@ -42,60 +48,65 @@ func main() {
 	CheckIfError(err)
 	defer s.Close()
 
-	blobMap := make(map[string]int)
-	ci, _ := r.CommitObjects()
-	ci.ForEach(func(c *object.Commit) error {
-		//fmt.Println("commits time: ",since, until,c.Author.When)
-		if c.Author.When.Before(until) && c.Author.When.After(since) {
+	blobMap := make(map[plumbing.Hash]BigFile)
+	duplicateBlob := make(map[plumbing.Hash]bool)
+	commitMap := make(map[plumbing.Hash]string)
 
-			fi, _ := c.Files()
-			fi.ForEach(func(f *object.File) error {
-				//fmt.Println("search file1:   ", f.Name)
-				cfi, _ := r.Log(&git.LogOptions{From: c.Hash, FileName: &f.Name, Order: git.LogOrderCommitterTime})
-				cfOldestTime := c.Author.When
-				cfi.ForEach(func(cf *object.Commit) error {
-					cf2, _ := cf.Files()
-					cf2.ForEach(func(f2 *object.File) error {
-						if f2.Hash == f.Hash && cf.Author.When.Before(cfOldestTime) {
-							cfOldestTime = cf.Author.When
-							if cfOldestTime.Before(since) {
-								return nil
-							}
-						}
-						return nil
-					})
-					return nil
-				})
-				if cfOldestTime.After(since) && blobMap[f.Hash.String()] == 0 {
-					var branch string
-					biter, _ := r.Branches()
-					biter.ForEach(func(b *plumbing.Reference) error {
-						citer, _ := r.Log(&git.LogOptions{From: b.Hash(), Since: &since, Until: &until})
-						citer.ForEach(func(cc *object.Commit) error {
-							if cc.Hash == c.Hash {
-								branch = b.Name().String()
-								return nil
-							}
-							return nil
-						})
-						return nil
-					})
-
-					fmt.Println("files catched: ", branch, c.Hash, f.Hash, f.Name, f.Size)
-					blobMap[f.Hash.String()] = 1
-				}
-				return nil
-			})
-			fs, _ := c.Stats()
-			for _, s := range fs {
-				if s.Addition+s.Deletion > 0 {
-					fmt.Println("commit stats: ", c.Hash, s.Name, s.Addition, s.Deletion)
-				}
-			}
-		}
+	biter, _ := r.Branches()
+	biter.ForEach(func(b *plumbing.Reference) error {
+		citer, _ := r.Log(&git.LogOptions{From: b.Hash(), Since: &since, Until: &until})
+		citer.ForEach(func(cc *object.Commit) error {
+			commitMap[cc.Hash] = b.Name().String()
+			return nil
+		})
 		return nil
 	})
+	fmt.Println("符合条件的commit数量：", len(commitMap))
 
+	for ch, bn := range commitMap {
+		commit, _ := r.CommitObject(ch)
+		fs, _ := commit.Stats()
+		for _, s := range fs {
+			if s.Addition+s.Deletion > 0 {
+				fmt.Println("commit stats with branch: ", bn, commit.Hash, s.Name, s.Addition, s.Deletion)
+			}
+		}
+
+		//找到该commit所有文件，判断文件提交时间是否在更早的时间，如果是，则跳过
+		fi, _ := commit.Files()
+		for f, err := fi.Next(); err == nil; {
+			if duplicateBlob[f.Hash] {
+				f, err = fi.Next()
+				continue
+			} else {
+				duplicateBlob[f.Hash] = true
+			}
+			var fileInOldCommit bool
+			cutoffTime := since.Add(-1 * time.Nanosecond)
+			commitWithOldFileIter, _ := r.Log(&git.LogOptions{From: commit.Hash, FileName: &f.Name, Order: git.LogOrderCommitterTime, Until: &cutoffTime})
+			for commitWithOldFile, err := commitWithOldFileIter.Next(); err == nil; {
+				oldCommitFileIter, _ := commitWithOldFile.Files()
+				for oldfile, err := oldCommitFileIter.Next(); err == nil; {
+					if oldfile.Hash == f.Hash {
+						fileInOldCommit = true
+						break
+					}
+					oldfile, err = oldCommitFileIter.Next()
+				}
+				if fileInOldCommit {
+					break
+				}
+				commitWithOldFile, err = commitWithOldFileIter.Next()
+			}
+			if !fileInOldCommit {
+				blobMap[f.Hash] = BigFile{bn, *commit, *f}
+			}
+			f, err = fi.Next()
+		}
+	}
+	for _, f := range blobMap {
+		fmt.Println(f.Branch, f.Commit.Hash, f.File.Name, f.File.Size)
+	}
 	fmt.Println(time.Since(timeStart))
 
 }
