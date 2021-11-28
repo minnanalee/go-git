@@ -60,7 +60,7 @@ func main() {
 		fs, _ := commit.Stats()
 		for _, s := range fs {
 			if s.Addition+s.Deletion > 0 {
-				fmt.Println("commit stats with branch:  ", bn, commit.Hash, s.Name, "\tadded: ", s.Addition, "\tdeleted: ", s.Deletion)
+				fmt.Println("commit stats with branch:1  ", bn, commit.Hash, s.Name, "\tadded: ", s.Addition, "\tdeleted: ", s.Deletion)
 			}
 		}
 		firstParent, err := commit.Parents().Next()
