@@ -50,7 +50,7 @@ func main() {
 
 			fi, _ := c.Files()
 			fi.ForEach(func(f *object.File) error {
-				//fmt.Println("search file1:  ", f.Name)
+				//fmt.Println("search file1:   ", f.Name)
 				cfi, _ := r.Log(&git.LogOptions{From: c.Hash, FileName: &f.Name, Order: git.LogOrderCommitterTime})
 				cfOldestTime := c.Author.When
 				cfi.ForEach(func(cf *object.Commit) error {
